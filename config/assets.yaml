@@ -1,14 +1,15 @@
 assets:
   crypto:
     - BTC-USD
-    - ETH-USD
   stocks:
-    - AAPL
-    - GOOGL
     - ^IXIC  # NASDAQ Index
   forex:
     - EURUSD=X
     - GBPUSD=X
+    - GBPJPY=X
+    - USDJPY=X
+    - USDCAD=X
+    - AUDCAD=X
 
 notification:
   discord:
