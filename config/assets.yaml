@@ -1,0 +1,18 @@
+assets:
+  crypto:
+    - BTC-USD
+    - ETH-USD
+  stocks:
+    - AAPL
+    - GOOGL
+    - ^IXIC  # NASDAQ Index
+  forex:
+    - EURUSD=X
+    - GBPUSD=X
+
+notification:
+  discord:
+    enabled: true
+  logging:
+    enabled: true
+    level: INFO
