@@ -7,17 +7,19 @@ from dotenv import load_dotenv
 
 logger = structlog.get_logger()
 
+
 def load_config():
     """Load configuration from yaml and environment"""
     # Load environment variables from .env file
     load_dotenv()
-    
+
     # Verify required environment variables
     if not os.getenv('DISCORD_WEBHOOK_URL'):
         logger.error("DISCORD_WEBHOOK_URL environment variable is not set")
         logger.info("Please create a .env file with your Discord webhook URL")
-        raise ValueError("Missing required environment variable: DISCORD_WEBHOOK_URL")
-    
+        raise ValueError(
+            "Missing required environment variable: DISCORD_WEBHOOK_URL")
+
     # Load asset configuration
     try:
         with open('config/assets.yaml', 'r') as file:
@@ -27,11 +29,12 @@ def load_config():
         logger.info("Please create config/assets.yaml file")
         raise
 
+
 async def main():
     try:
         # Load configuration
         config = load_config()
-        
+
         # Create monitors for each asset
         monitors = []
         for category, assets in config['assets'].items():
@@ -42,10 +45,10 @@ async def main():
                     notification_config=config['notification']
                 )
                 monitors.append(monitor)
-        
+
         # Run all monitors concurrently
         await asyncio.gather(*(monitor.run() for monitor in monitors))
-        
+
     except Exception as e:
         logger.error(f"Failed to start service: {str(e)}")
         raise
