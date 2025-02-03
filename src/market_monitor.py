@@ -20,49 +20,73 @@ class MarketStructureMonitor:
         """Fetch market data using yfinance"""
         try:
             ticker = yf.Ticker(self.symbol)
-            df = ticker.history(interval='15m', period='1d')
-            return df
+            # Fetch slightly more data for better context
+            df = ticker.history(interval='15m', period='2d')
+            # Only use the last day's worth of data for analysis
+            return df.tail(96)  # 96 15-minute periods in 24 hours
         except Exception as e:
             self.logger.error("Error fetching market data", error=str(e))
             return None
 
     def detect_swing_points(self, df, window=5):
-        """Detect swing highs and lows"""
-        if df is None or df.empty:
+        """Detect swing highs and lows with improved validation"""
+        if df is None or len(df) < window * 2:
+            self.logger.warning("Insufficient data for swing detection")
             return None
         
-        df['Swing_High'] = df['High'].rolling(window=window, center=True).apply(
-            lambda x: 1 if x.iloc[window//2] == max(x) else 0
-        )
-        df['Swing_Low'] = df['Low'].rolling(window=window, center=True).apply(
-            lambda x: 1 if x.iloc[window//2] == min(x) else 0
-        )
-        return df
+        try:
+            # Add validation for swing points
+            min_price_movement = df['High'].mean() * 0.001  # 0.1% minimum movement
+            
+            df['Swing_High'] = df['High'].rolling(window=window, center=True).apply(
+                lambda x: 1 if (x.iloc[window//2] == max(x) and 
+                               max(x) - min(x) > min_price_movement) else 0
+            )
+            df['Swing_Low'] = df['Low'].rolling(window=window, center=True).apply(
+                lambda x: 1 if (x.iloc[window//2] == min(x) and 
+                               max(x) - min(x) > min_price_movement) else 0
+            )
+            return df
+        except Exception as e:
+            self.logger.error("Error in swing point detection", error=str(e))
+            return None
 
     def analyze_market_structure(self, df):
-        """Analyze market structure based on swing points"""
+        """Analyze market structure with validation"""
         if df is None:
             return 'UNDEFINED'
 
-        swing_highs = df[df['Swing_High'] == 1]['High'].tail(3)
-        swing_lows = df[df['Swing_Low'] == 1]['Low'].tail(3)
-        
-        if len(swing_highs) >= 2 and len(swing_lows) >= 2:
-            last_two_highs = swing_highs.tail(2).values
-            last_two_lows = swing_lows.tail(2).values
+        try:
+            swing_highs = df[df['Swing_High'] == 1]['High'].tail(3)
+            swing_lows = df[df['Swing_Low'] == 1]['Low'].tail(3)
             
-            if last_two_highs[1] > last_two_highs[0] and last_two_lows[1] > last_two_lows[0]:
-                return 'UPTREND'
-            elif last_two_highs[1] < last_two_highs[0] and last_two_lows[1] < last_two_lows[0]:
-                return 'DOWNTREND'
-            else:
-                return 'CONSOLIDATION'
-        
-        return 'UNDEFINED'
+            if len(swing_highs) >= 2 and len(swing_lows) >= 2:
+                last_two_highs = swing_highs.tail(2).values
+                last_two_lows = swing_lows.tail(2).values
+                
+                # Calculate percentage changes
+                high_change = (last_two_highs[1] - last_two_highs[0]) / last_two_highs[0]
+                low_change = (last_two_lows[1] - last_two_lows[0]) / last_two_lows[0]
+                
+                # Require meaningful percentage changes
+                min_change = 0.002  # 0.2% minimum change
+                
+                if high_change > min_change and low_change > min_change:
+                    return 'UPTREND'
+                elif high_change < -min_change and low_change < -min_change:
+                    return 'DOWNTREND'
+                else:
+                    return 'CONSOLIDATION'
+            
+            return 'UNDEFINED'
+        except Exception as e:
+            self.logger.error("Error in market structure analysis", error=str(e))
+            return 'UNDEFINED'
 
     async def run(self):
-        """Main monitoring loop"""
-        self.logger.info("Starting monitoring")
+        """Main monitoring loop with enhanced messaging"""
+        self.logger.info("Starting monitoring", symbol=self.symbol)
+        consecutive_errors = 0
         
         while True:
             try:
@@ -70,28 +94,41 @@ class MarketStructureMonitor:
                 df = self.detect_swing_points(df)
                 current_structure = self.analyze_market_structure(df)
                 
-                if self.previous_structure and current_structure != self.previous_structure:
+                if (self.previous_structure and 
+                    current_structure != self.previous_structure and 
+                    current_structure != 'UNDEFINED'):
+                    
+                    current_price = df['Close'].iloc[-1]
                     message = (
+                        f"Market Structure Change Detected\n\n"
                         f"Asset: {self.symbol} ({self.category})\n"
-                        f"Previous Structure: {self.previous_structure}\n"
-                        f"Current Structure: {current_structure}\n"
+                        f"Structure Change: {self.previous_structure} → {current_structure}\n"
+                        f"Current Price: ${current_price:.2f}\n"
                         f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                     )
                     
                     self.logger.info(
                         "Market structure changed",
                         previous=self.previous_structure,
-                        current=current_structure
+                        current=current_structure,
+                        price=current_price
                     )
                     
                     if self.notification_config['discord']['enabled']:
                         await self.notifier.send_message(message)
                 
                 self.previous_structure = current_structure
-                
-                # Wait for next check (15 minutes)
-                await asyncio.sleep(900)
+                consecutive_errors = 0
+                await asyncio.sleep(900)  # 15 minutes
                 
             except Exception as e:
-                self.logger.error("Error in monitoring loop", error=str(e))
-                await asyncio.sleep(60)
+                consecutive_errors += 1
+                self.logger.error(
+                    "Error in monitoring loop",
+                    error=str(e),
+                    consecutive_errors=consecutive_errors
+                )
+                
+                # Exponential backoff for repeated errors
+                wait_time = min(60 * (2 ** (consecutive_errors - 1)), 900)
+                await asyncio.sleep(wait_time)
