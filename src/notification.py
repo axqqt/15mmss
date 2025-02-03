@@ -36,8 +36,8 @@ class DiscordNotifier:
         """
         try:
             embed = {
-                "title": title,
-                "description": message,
+                "title": f"15 Minute {title}",
+                "description": f"15 Minute {message}",
                 "color": color,
                 "timestamp": datetime.now().isoformat()
             }
