@@ -2,6 +2,7 @@ import os
 import aiohttp
 import structlog
 from datetime import datetime
+import pytz  # Add this import for timezone handling
 from typing import Dict, Optional, List, Union
 
 logger = structlog.get_logger()
@@ -17,6 +18,9 @@ class DiscordNotifier:
         # Add support for multiple webhooks and fallback mechanisms
         self.backup_webhooks = os.getenv(
             'DISCORD_BACKUP_WEBHOOKS', '').split(',')
+        
+        # Define New York timezone
+        self.ny_tz = pytz.timezone('America/New_York')
 
     async def send_message(
         self,
@@ -35,11 +39,14 @@ class DiscordNotifier:
             additional_embeds (List[Dict], optional): Additional embed objects
         """
         try:
+            # Use New York time for timestamp
+            ny_time = datetime.now(self.ny_tz)
+            
             embed = {
                 "title": f"15 Minute {title}",
                 "description": f"15 Minute {message}",
                 "color": color,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": ny_time.isoformat()
             }
 
             payload = {

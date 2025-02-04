@@ -4,6 +4,7 @@ import yfinance as yf
 from datetime import datetime
 import structlog
 from notification import DiscordNotifier
+import pytz  # Add this import for timezone handling
 
 logger = structlog.get_logger()
 
@@ -18,6 +19,8 @@ class MarketStructureMonitor:
         self.last_swing_low = None
         self.logger = logger.bind(symbol=symbol, category=category)
         self.notifier = DiscordNotifier()
+        # Define New York timezone
+        self.ny_tz = pytz.timezone('America/New_York')
 
     async def get_market_data(self):
         """Fetch market data using yfinance"""
@@ -105,12 +108,14 @@ class MarketStructureMonitor:
                         current_structure != self.previous_structure):
 
                     current_price = df['Close'].iloc[-1]
+                    # Convert current time to New York time
+                    ny_time = datetime.now(self.ny_tz)
                     message = (
                         f"Market Structure Change Detected\n\n"
                         f"Asset: {self.symbol} ({self.category})\n"
                         f"Structure Change: {self.previous_structure} → {current_structure}\n"
                         f"Current Price: ${current_price:.2f}\n"
-                        f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                        f"Time: {ny_time.strftime('%Y-%m-%d %H:%M:%S %Z')}"
                     )
 
                     self.logger.info(
