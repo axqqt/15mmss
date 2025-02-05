@@ -2,10 +2,11 @@ import asyncio
 import yaml
 import os
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from market_monitor import MarketStructureMonitor
 import structlog
 from dotenv import load_dotenv
+from notification import DiscordNotifier
 
 logger = structlog.get_logger()
 
@@ -54,44 +55,79 @@ class ConfigLoader:
     
     @staticmethod
     def _validate_config(config: Dict[str, Any]):
-        """
-        Validate configuration schema and content
+        """Validate configuration schema and content"""
+        required_keys = ['assets', 'notification']
+        for key in required_keys:
+            if key not in config:
+                raise ValueError(f"Missing '{key}' key in configuration")
+            
+        if not isinstance(config['assets'], dict):
+            raise ValueError("'assets' must be a dictionary")
+            
+        if not isinstance(config['notification'], dict):
+            raise ValueError("'notification' must be a dictionary")
+            
+        # Validate each asset category and its contents
+        for category, assets in config['assets'].items():
+            if not isinstance(assets, list):
+                raise ValueError(f"Assets in category '{category}' must be a list")
+            if not assets:
+                raise ValueError(f"Category '{category}' has no assets")
+
+class MarketMonitorService:
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.monitors: List[MarketStructureMonitor] = []
+        self.notifier = DiscordNotifier()
         
-        Args:
-            config (Dict[str, Any]): Configuration to validate
+    async def initialize_monitors(self):
+        """Initialize all market structure monitors"""
+        for category, assets in self.config['assets'].items():
+            for asset in assets:
+                monitor = MarketStructureMonitor(
+                    symbol=asset,
+                    category=category,
+                    notification_config=self.config['notification']
+                )
+                self.monitors.append(monitor)
+                logger.info(f"Initialized monitor", symbol=asset, category=category)
+    
+    async def run_monitor(self, monitor: MarketStructureMonitor):
+        """Run a single monitor with error handling"""
+        try:
+            await monitor.run()
+        except Exception as e:
+            logger.error(
+                "Monitor error",
+                symbol=monitor.symbol,
+                category=monitor.category,
+                error=str(e)
+            )
+    
+    async def start(self):
+        """Start all monitors"""
+        await self.initialize_monitors()
         
-        Raises:
-            ValueError: If configuration is invalid
-        """
-        if 'assets' not in config:
-            raise ValueError("Missing 'assets' key in configuration")
+        # Create tasks for all monitors
+        monitor_tasks = [
+            self.run_monitor(monitor)
+            for monitor in self.monitors
+        ]
         
-        if 'notification' not in config:
-            raise ValueError("Missing 'notification' key in configuration")
-        
-        # Additional validation can be added here
+        # Run all monitors concurrently
+        await asyncio.gather(*monitor_tasks, return_exceptions=True)
 
 async def main():
     try:
         # Load configuration
         config = ConfigLoader.load_config()
-
-        # Create monitors for each asset
-        monitors = [
-            MarketStructureMonitor(
-                symbol=asset,
-                category=category,
-                notification_config=config['notification']
-            )
-            for category, assets in config['assets'].items()
-            for asset in assets
-        ]
-
-        # Run all monitors concurrently with error handling
-        await asyncio.gather(*(monitor.run() for monitor in monitors))
+        
+        # Initialize and start service
+        service = MarketMonitorService(config)
+        await service.start()
 
     except Exception as e:
-        logger.error(f"Failed to start service", error=str(e))
+        logger.error("Failed to start service", error=str(e))
         raise
 
 if __name__ == "__main__":
@@ -101,5 +137,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Service stopped by user")
     except Exception as e:
-        logger.error(f"Service crashed", error=str(e))
+        logger.error("Service crashed", error=str(e))
         raise
