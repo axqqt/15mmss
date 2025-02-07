@@ -1,11 +1,10 @@
 import asyncio
 import pandas as pd
-import numpy as np
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime
 import structlog
-import pytz
 from notification import DiscordNotifier
+import pytz  # Add this import for timezone handling
 
 logger = structlog.get_logger()
 
@@ -16,190 +15,100 @@ class MarketStructureMonitor:
         self.category = category
         self.notification_config = notification_config
         self.previous_structure = None
-        self.ny_tz = pytz.timezone('America/New_York')
-        self.notifier = DiscordNotifier()
+        self.last_swing_high = None
+        self.last_swing_low = None
         self.logger = logger.bind(symbol=symbol, category=category)
-        
-        # Enhanced tracking parameters
-        self.trend_strength_threshold = 0.75  # More robust trend confirmation
-        self.volatility_factor = 1.5  # Adaptive to market volatility
-        self.max_lookback = 20  # Increased contextual analysis
+        self.notifier = DiscordNotifier()
+        # Define New York timezone
+        self.ny_tz = pytz.timezone('America/New_York')
 
     async def get_market_data(self):
-        """Enhanced market data retrieval with improved context"""
+        """Fetch market data using yfinance"""
         try:
             ticker = yf.Ticker(self.symbol)
-            # Extended data for more comprehensive analysis
-            df = ticker.history(interval='15m', period='5d')
-            
-            # Add technical indicators for trend confirmation
-            df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
-            df['EMA_200'] = df['Close'].ewm(span=200, adjust=False).mean()
-            df['ATR'] = self.calculate_atr(df)
-            
-            return df.tail(96 * 5)  # Extended data for robust analysis
+            # Fetch slightly more data for better context
+            df = ticker.history(interval='15m', period='2d')
+            # Only use the last day's worth of data for analysis
+            return df.tail(96)  # 96 15-minute periods in 24 hours
         except Exception as e:
-            self.logger.error("Market data retrieval error", error=str(e))
+            self.logger.error("Error fetching market data", error=str(e))
             return None
 
-    def calculate_atr(self, df, period=14):
-        """Calculate Average True Range for volatility assessment"""
-        high_low = df['High'] - df['Low']
-        high_close = np.abs(df['High'] - df['Close'].shift(1))
-        low_close = np.abs(df['Low'] - df['Close'].shift(1))
-        
-        true_range = np.maximum(high_low, high_close, low_close)
-        atr = true_range.rolling(window=period).mean()
-        
-        return atr
-
-    def detect_advanced_swing_points(self, df):
-        """
-        Advanced swing point detection with multi-factor validation
-        """
-        if df is None or len(df) < 20:
+    def detect_swing_points(self, df, window=5):
+        """Detect swing highs and lows with improved validation"""
+        if df is None or len(df) < window * 2:
+            self.logger.warning("Insufficient data for swing detection")
             return None
 
         try:
-            # Volatility-adjusted minimum movement
-            volatility = df['ATR'].mean()
-            min_movement = volatility * self.volatility_factor
+            # Add validation for swing points
+            # 0.2% minimum movement
+            min_price_movement = df['High'].mean() * 0.002
 
-            # Comprehensive swing point detection
-            df['Swing_High'] = df.apply(
-                lambda row: self.is_swing_high(df, row.name, min_movement), 
-                axis=1
+            df['Swing_High'] = df['High'].rolling(window=window, center=True).apply(
+                lambda x: 1 if (x.iloc[window//2] == max(x) and
+                                max(x) - min(x) > min_price_movement) else 0
             )
-            df['Swing_Low'] = df.apply(
-                lambda row: self.is_swing_low(df, row.name, min_movement), 
-                axis=1
+            df['Swing_Low'] = df['Low'].rolling(window=window, center=True).apply(
+                lambda x: 1 if (x.iloc[window//2] == min(x) and
+                                max(x) - min(x) > min_price_movement) else 0
             )
-            
             return df
         except Exception as e:
-            self.logger.error("Advanced swing detection error", error=str(e))
+            self.logger.error("Error in swing point detection", error=str(e))
             return None
 
-    def is_swing_high(self, df, index, min_movement):
-        """Advanced swing high validation"""
-        window = min(10, len(df) // 2)
-        
-        # Check multiple validation criteria
-        if index < window or index >= len(df) - window:
-            return 0
-        
-        current_price = df.loc[index, 'High']
-        surrounding_prices = df.loc[index-window:index+window, 'High']
-        
-        is_local_max = current_price == surrounding_prices.max()
-        movement_significant = (current_price - surrounding_prices.min()) > min_movement
-        above_trend_line = current_price > df.loc[index, 'EMA_50']
-        
-        return 1 if is_local_max and movement_significant and above_trend_line else 0
-
-    def is_swing_low(self, df, index, min_movement):
-        """Advanced swing low validation"""
-        window = min(10, len(df) // 2)
-        
-        # Check multiple validation criteria
-        if index < window or index >= len(df) - window:
-            return 0
-        
-        current_price = df.loc[index, 'Low']
-        surrounding_prices = df.loc[index-window:index+window, 'Low']
-        
-        is_local_min = current_price == surrounding_prices.min()
-        movement_significant = (surrounding_prices.max() - current_price) > min_movement
-        below_trend_line = current_price < df.loc[index, 'EMA_50']
-        
-        return 1 if is_local_min and movement_significant and below_trend_line else 0
-
-    def analyze_advanced_market_structure(self, df):
-        """
-        Enhanced market structure analysis with multi-factor trend confirmation
-        """
+    def analyze_market_structure(self, df):
+        """Analyze market structure with strict trend confirmation"""
         if df is None:
             return None
 
         try:
-            # Robust trend identification
+            # Find swing highs and lows
             swing_highs = df[df['Swing_High'] == 1]
             swing_lows = df[df['Swing_Low'] == 1]
 
-            last_close = df['Close'].iloc[-1]
-            last_ema_50 = df['EMA_50'].iloc[-1]
-            last_ema_200 = df['EMA_200'].iloc[-1]
-
-            # Advanced trend confirmation
-            trend_strength = self.compute_trend_strength(df)
-
+            # Only consider confirmed swing points
             if len(swing_highs) > 0 and len(swing_lows) > 0:
-                # Complex trend validation
-                uptrend_conditions = (
-                    last_close > last_ema_50 and 
-                    last_ema_50 > last_ema_200 and
-                    trend_strength > self.trend_strength_threshold
-                )
+                latest_high = swing_highs['High'].iloc[-1]
+                latest_low = swing_lows['Low'].iloc[-1]
 
-                downtrend_conditions = (
-                    last_close < last_ema_50 and 
-                    last_ema_50 < last_ema_200 and
-                    trend_strength > self.trend_strength_threshold
-                )
+                # Get the last close price
+                last_close = df['Close'].iloc[-1]
 
-                if uptrend_conditions and self.previous_structure != 'UPTREND':
-                    return 'UPTREND'
-                elif downtrend_conditions and self.previous_structure != 'DOWNTREND':
-                    return 'DOWNTREND'
+                # Check for uptrend: close above previous swing high
+                if last_close > latest_high:
+                    if self.previous_structure != 'UPTREND':
+                        return 'UPTREND'
+
+                # Check for downtrend: close below previous swing low
+                elif last_close < latest_low:
+                    if self.previous_structure != 'DOWNTREND':
+                        return 'DOWNTREND'
 
             return None
         except Exception as e:
-            self.logger.error("Advanced structure analysis error", error=str(e))
+            self.logger.error(
+                "Error in market structure analysis", error=str(e))
             return None
 
-    def compute_trend_strength(self, df):
-        """
-        Compute trend strength using multiple indicators
-        """
-        price_momentum = np.mean(np.sign(df['Close'].diff()))
-        ema_momentum = np.sign(df['EMA_50'].diff().iloc[-1])
-        volatility_factor = 1 - (df['ATR'].iloc[-1] / df['Close'].iloc[-1])
-        
-        return abs(price_momentum * ema_momentum * volatility_factor)
-
-    async def wait_until_next_day(self):
-        """Wait until midnight NY time for daily reset"""
-        while True:
-            now = datetime.now(self.ny_tz)
-            next_midnight = (now + timedelta(days=1)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-            wait_seconds = (next_midnight - now).total_seconds()
-            
-            await asyncio.sleep(wait_seconds)
-            # Reset tracking variables
-            self.previous_structure = None
-            self.logger.info("Daily reset completed", symbol=self.symbol)
-
     async def run(self):
-        """Main monitoring loop with daily reset"""
+        """Main monitoring loop with enhanced messaging"""
         self.logger.info("Starting monitoring", symbol=self.symbol)
-        
-        # Start daily reset task concurrently
-        reset_task = asyncio.create_task(self.wait_until_next_day())
-        
         consecutive_errors = 0
+
         while True:
             try:
                 df = await self.get_market_data()
-                df = self.detect_advanced_swing_points(df)
-                current_structure = self.analyze_advanced_market_structure(df)
+                df = self.detect_swing_points(df)
+                current_structure = self.analyze_market_structure(df)
 
                 if (self.previous_structure and
                     current_structure is not None and
                         current_structure != self.previous_structure):
 
                     current_price = df['Close'].iloc[-1]
+                    # Convert current time to New York time
                     ny_time = datetime.now(self.ny_tz)
                     message = (
                         f"Market Structure Change Detected\n\n"
