@@ -6,7 +6,6 @@ assets:
     - BTC-USD  # Bitcoin vs USD
   stocks:  # Stock indices
     - ^IXIC  # NASDAQ Composite Index
-    - GSPC  # S&P 500 Index
   forex:  # Foreign exchange pairs
     - EURUSD=X  # Euro vs USD
     - GBPUSD=X  # British Pound vs USD
