@@ -16,9 +16,6 @@ assets:
     - AUDCAD=X  # Australian Dollar vs Canadian Dollar
   commodities:  # Commodities
     - GC=F  # Gold Futures
-    - SI=F  # Silver Futures
-    - CL=F  # Crude Oil Futures
-
 # Notification settings
 notification:
   discord:
