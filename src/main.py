@@ -1,8 +1,7 @@
 import asyncio
 import yaml
 import os
-import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from market_monitor import MarketStructureMonitor
 import structlog
 from dotenv import load_dotenv
@@ -23,18 +22,20 @@ class ConfigLoader:
         """
         # Load environment variables
         load_dotenv()
-
-        # Validate environment variables
+        
+        # Validate required environment variables
         required_env_vars = ['DISCORD_WEBHOOK_URL']
         missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+        empty_vars = [var for var in required_env_vars if os.getenv(var) == ""]
         
-        if missing_vars:
+        if missing_vars or empty_vars:
             logger.error(
-                "Missing required environment variables", 
-                missing_vars=missing_vars
+                "Missing or empty required environment variables",
+                missing_vars=missing_vars,
+                empty_vars=empty_vars
             )
-            raise ValueError(f"Missing env vars: {', '.join(missing_vars)}")
-
+            raise ValueError(f"Missing or empty env vars: {', '.join(missing_vars + empty_vars)}")
+        
         # Load configuration file
         try:
             with open(config_path, 'r') as file:
@@ -63,21 +64,57 @@ class ConfigLoader:
         Raises:
             ValueError: If configuration is invalid
         """
-        if 'assets' not in config:
-            raise ValueError("Missing 'assets' key in configuration")
+        if not isinstance(config, dict):
+            raise ValueError("Configuration must be a dictionary")
         
-        if 'notification' not in config:
-            raise ValueError("Missing 'notification' key in configuration")
+        # Validate 'assets' section
+        if 'assets' not in config or not isinstance(config['assets'], dict):
+            raise ValueError("Missing or invalid 'assets' key in configuration")
         
-        # Additional validation can be added here
+        for category, assets in config['assets'].items():
+            if not isinstance(assets, list) or not all(isinstance(asset, str) for asset in assets):
+                raise ValueError(f"Invalid assets list for category '{category}'")
+        
+        # Validate 'notification' section
+        if 'notification' not in config or not isinstance(config['notification'], dict):
+            raise ValueError("Missing or invalid 'notification' key in configuration")
+        
+        if 'discord' not in config['notification'] or not isinstance(config['notification']['discord'], dict):
+            raise ValueError("Missing or invalid 'discord' configuration")
+        
+        if 'enabled' not in config['notification']['discord'] or not isinstance(config['notification']['discord']['enabled'], bool):
+            raise ValueError("Missing or invalid 'enabled' flag in discord notification configuration")
+        
+        # Validate 'logging' section
+        if 'logging' not in config['notification'] or not isinstance(config['notification']['logging'], dict):
+            raise ValueError("Missing or invalid 'logging' configuration")
+        
+        if 'enabled' not in config['notification']['logging'] or not isinstance(config['notification']['logging']['enabled'], bool):
+            raise ValueError("Missing or invalid 'enabled' flag in logging configuration")
+        
+        if 'level' not in config['notification']['logging'] or config['notification']['logging']['level'].upper() not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
+            raise ValueError("Missing or invalid 'level' in logging configuration")
+        
+        # Validate optional 'settings' section
+        if 'settings' in config:
+            if not isinstance(config['settings'], dict):
+                raise ValueError("Invalid 'settings' section in configuration")
+            
+            if 'timezone' in config['settings'] and not isinstance(config['settings']['timezone'], str):
+                raise ValueError("Invalid 'timezone' in settings")
+            
+            if 'interval_minutes' in config['settings'] and not isinstance(config['settings']['interval_minutes'], int):
+                raise ValueError("Invalid 'interval_minutes' in settings")
 
 async def main():
     try:
         # Load configuration
+        logger.info("Loading configuration...")
         config = ConfigLoader.load_config()
-
+        
         # Create monitors for each asset
-        monitors = [
+        logger.info("Initializing market structure monitors...")
+        monitors: List[MarketStructureMonitor] = [
             MarketStructureMonitor(
                 symbol=asset,
                 category=category,
@@ -86,12 +123,13 @@ async def main():
             for category, assets in config['assets'].items()
             for asset in assets
         ]
-
+        
         # Run all monitors concurrently with error handling
+        logger.info("Starting market structure monitors...")
         await asyncio.gather(*(monitor.run() for monitor in monitors))
-
+    
     except Exception as e:
-        logger.error(f"Failed to start service", error=str(e))
+        logger.error("Failed to start service", error=str(e))
         raise
 
 if __name__ == "__main__":
@@ -101,5 +139,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Service stopped by user")
     except Exception as e:
-        logger.error(f"Service crashed", error=str(e))
+        logger.error("Service crashed", error=str(e))
         raise
