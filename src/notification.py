@@ -2,23 +2,39 @@ import os
 import aiohttp
 import structlog
 from datetime import datetime
-import pytz  # Add this import for timezone handling
+import pytz
 from typing import Dict, Optional, List, Union
+import resend  # Import the Resend SDK
 
 logger = structlog.get_logger()
 
+
 class DiscordNotifier:
     def __init__(self, webhook_url: Optional[str] = None):
+        # Discord Webhook Configuration
         self.webhook_url = webhook_url or os.getenv('DISCORD_WEBHOOK_URL')
         if not self.webhook_url:
             raise ValueError(
                 "DISCORD_WEBHOOK_URL environment variable is not set")
+
         # Add support for multiple webhooks and fallback mechanisms
         self.backup_webhooks = os.getenv(
             'DISCORD_BACKUP_WEBHOOKS', '').split(',')
 
         # Define New York timezone
         self.ny_tz = pytz.timezone('America/New_York')
+
+        # Email configuration (using Resend SDK)
+        self.resend_api_key = os.getenv('RESEND_API_KEY')
+        if not self.resend_api_key:
+            raise ValueError("RESEND_API_KEY environment variable is not set")
+
+        resend.api_key = self.resend_api_key  # Set the Resend API key
+
+        self.email_sender = os.getenv(
+            'EMAIL_SENDER', 'onboarding@resend.dev')  # Default sender
+        self.email_recipient = os.getenv(
+            'EMAIL_RECIPIENT', 'dulransamarasinghe3@gmail.com')
 
     async def send_message(
         self,
@@ -28,7 +44,7 @@ class DiscordNotifier:
         additional_embeds: Optional[List[Dict]] = None
     ):
         """
-        Send a message with enhanced flexibility and error handling
+        Send a message with enhanced flexibility and error handling.
         Args:
             message (str): Main message content
             title (str, optional): Embed title
@@ -60,13 +76,13 @@ class DiscordNotifier:
                     }
                 ]
             }
-
             payload = {
                 "embeds": [embed] + (additional_embeds or [])
             }
 
             # Add rate limit handling and webhook fallback
             webhooks_to_try = [self.webhook_url] + self.backup_webhooks
+            discord_success = False
             for webhook in webhooks_to_try:
                 if not webhook:
                     continue
@@ -74,8 +90,10 @@ class DiscordNotifier:
                     async with aiohttp.ClientSession() as session:
                         async with session.post(webhook, json=payload) as response:
                             if response.status == 204:
-                                logger.info("Discord notification sent successfully")
-                                return True
+                                logger.info(
+                                    "Discord notification sent successfully")
+                                discord_success = True
+                                break
                             else:
                                 logger.warning(
                                     "Failed to send Discord notification",
@@ -88,7 +106,38 @@ class DiscordNotifier:
                         error=str(e),
                         webhook=webhook
                     )
-            return False
+
+            # Send email notification via Resend SDK
+            email_success = self.send_email_via_resend(title, message)
+            return discord_success and email_success
         except Exception as e:
-            logger.error("Unexpected error in Discord notification", error=str(e))
+            logger.error(
+                "Unexpected error in Discord notification", error=str(e))
+            return False
+
+    def send_email_via_resend(self, subject: str, body: str) -> bool:
+        """
+        Send an email notification using the Resend SDK.
+        Args:
+            subject (str): Email subject
+            body (str): Email body content
+        Returns:
+            bool: True if the email was sent successfully, False otherwise
+        """
+        try:
+            # Send the email using Resend's SDK
+            r = resend.Emails.send({
+                "from": self.email_sender,
+                # Resend expects a list of recipients
+                "to": [self.email_recipient],
+                "subject": subject,
+                "html": f"<p>{body}</p>"  # Wrap the body in HTML tags
+            })
+            logger.info(
+                "Email notification sent successfully via Resend",
+                email_id=r.get("id")  # Log the email ID for tracking
+            )
+            return True
+        except Exception as e:
+            logger.error("Error sending email via Resend", error=str(e))
             return False
