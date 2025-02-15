@@ -7,4 +7,3 @@ structlog
 python-dotenv
 pytz
 resend
-yaml
