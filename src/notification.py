@@ -109,7 +109,7 @@ class DiscordNotifier:
 
     def send_email_via_resend(self, subject: str, body: str, embed: Dict) -> bool:
         """
-        Send an email notification using the Resend SDK.
+        Send an email notification using the Resend SDK with improved styling.
         Args:
             subject (str): Email subject
             body (str): Email body content
@@ -118,14 +118,92 @@ class DiscordNotifier:
             bool: True if the email was sent successfully, False otherwise
         """
         try:
-            # Construct the HTML email body based on the embed data
+            # Construct the HTML email body with improved styling
             html_body = f"""
-            <h1>{subject}</h1>
-            <p><strong>Message:</strong> {body}</p>
-            <p><strong>Timestamp:</strong> {embed['timestamp']}</p>
-            <p><strong>Footer:</strong> {embed['footer']['text']}</p>
-            <img src="{embed['thumbnail']['url']}" alt="Thumbnail" style="max-width: 100px;">
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body {{
+                        font-family: Arial, sans-serif;
+                        background-color: #f9f9f9;
+                        margin: 0;
+                        padding: 20px;
+                    }}
+                    .email-container {{
+                        max-width: 600px;
+                        margin: 0 auto;
+                        background-color: #ffffff;
+                        border-radius: 8px;
+                        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                        overflow: hidden;
+                    }}
+                    .header {{
+                        background-color: #4CAF50;
+                        color: white;
+                        padding: 20px;
+                        text-align: center;
+                    }}
+                    .content {{
+                        padding: 20px;
+                    }}
+                    .footer {{
+                        background-color: #f1f1f1;
+                        color: #777;
+                        text-align: center;
+                        padding: 10px;
+                        font-size: 12px;
+                    }}
+                    .message {{
+                        font-size: 16px;
+                        line-height: 1.6;
+                        margin-bottom: 20px;
+                    }}
+                    .timestamp {{
+                        font-size: 14px;
+                        color: #555;
+                        margin-bottom: 10px;
+                    }}
+                    .thumbnail {{
+                        text-align: center;
+                        margin-top: 20px;
+                    }}
+                    .thumbnail img {{
+                        max-width: 100px;
+                        border-radius: 8px;
+                    }}
+                    a {{
+                        color: #4CAF50;
+                        text-decoration: none;
+                    }}
+                    a:hover {{
+                        text-decoration: underline;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="email-container">
+                    <div class="header">
+                        <h1>{subject}</h1>
+                    </div>
+                    <div class="content">
+                        <p class="message"><strong>Message:</strong> {body}</p>
+                        <p class="timestamp"><strong>Timestamp:</strong> {embed['timestamp']}</p>
+                        <p><strong>Footer:</strong> {embed['footer']['text']}</p>
+                        <div class="thumbnail">
+                            <img src="{embed['thumbnail']['url']}" alt="Thumbnail">
+                        </div>
+                    </div>
+                    <div class="footer">
+                        Sent by Market Monitor Bot
+                    </div>
+                </div>
+            </body>
+            </html>
             """
+
             # Send the email using Resend's SDK
             r = resend.Emails.send({
                 "from": self.email_sender,
