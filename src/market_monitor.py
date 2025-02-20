@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 import structlog
 from notification import DiscordNotifier
 import pytz
+import os
+import pickle
 
 logger = structlog.get_logger()
 
@@ -12,8 +14,10 @@ logger = structlog.get_logger()
 SYMBOL_DISPLAY_NAMES = {
     "IXIC": "NASDAQ",
     "GC=F": "XAUUSD",
+    "USDCAD=X": "USDCAD",
     # Add more mappings as needed
 }
+
 
 class MarketStructureMonitor:
     def __init__(self, symbol, category, notification_config):
@@ -28,14 +32,41 @@ class MarketStructureMonitor:
         self.ny_tz = pytz.timezone('America/New_York')
 
     async def get_market_data(self):
-        """Fetch market data using yfinance"""
-        try:
-            ticker = yf.Ticker(self.symbol)
-            df = ticker.history(interval='15m', period='2d')
-            return df.tail(96)  # 96 15-minute periods in 24 hours
-        except Exception as e:
-            self.logger.error("Error fetching market data", error=str(e))
-            return None
+        """Fetch market data using yfinance with exponential backoff and caching"""
+        cache_file = f"{self.symbol}_cache.pkl"
+        if os.path.exists(cache_file):
+            with open(cache_file, "rb") as f:
+                cached_data = pickle.load(f)
+                if datetime.now() - cached_data['timestamp'] < timedelta(minutes=15):
+                    self.logger.info("Using cached data")
+                    return cached_data['data']
+
+        max_retries = 5
+        retry_delay = 1  # Initial delay in seconds
+        for attempt in range(max_retries):
+            try:
+                ticker = yf.Ticker(self.symbol)
+                df = ticker.history(interval='15m', period='2d')
+                data = df.tail(96)  # 96 15-minute periods in 24 hours
+
+                # Cache the data
+                with open(cache_file, "wb") as f:
+                    pickle.dump({'timestamp': datetime.now(), 'data': data}, f)
+
+                return data
+            except Exception as e:
+                if "rate limited" in str(e).lower():
+                    self.logger.warning(
+                        f"Rate limit hit, retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Double the delay for the next retry
+                else:
+                    self.logger.error(
+                        "Error fetching market data", error=str(e))
+                    return None
+
+        self.logger.error("Max retries reached. Failed to fetch market data.")
+        return None
 
     def detect_swing_points(self, df, window=5):
         """Detect swing highs and lows with improved validation"""
@@ -76,23 +107,25 @@ class MarketStructureMonitor:
                         return 'DOWNTREND'
             return None
         except Exception as e:
-            self.logger.error("Error in market structure analysis", error=str(e))
+            self.logger.error(
+                "Error in market structure analysis", error=str(e))
             return None
 
     async def run(self):
         """Main monitoring loop aligned to New York time"""
         self.logger.info("Starting monitoring", symbol=self.symbol)
-
         while True:
             try:
                 # Align to the next 15-minute interval starting from midnight NY time
                 ny_time = datetime.now(self.ny_tz)
-                midnight_ny = ny_time.replace(hour=0, minute=0, second=0, microsecond=0)
-                elapsed_minutes = int((ny_time - midnight_ny).total_seconds() / 60)
+                midnight_ny = ny_time.replace(
+                    hour=0, minute=0, second=0, microsecond=0)
+                elapsed_minutes = int(
+                    (ny_time - midnight_ny).total_seconds() / 60)
                 next_interval_minutes = ((elapsed_minutes // 15) + 1) * 15
-                next_run_time = midnight_ny + timedelta(minutes=next_interval_minutes)
+                next_run_time = midnight_ny + \
+                    timedelta(minutes=next_interval_minutes)
                 sleep_time = (next_run_time - ny_time).total_seconds()
-
                 await asyncio.sleep(sleep_time)
 
                 # Fetch and process data
@@ -105,7 +138,8 @@ class MarketStructureMonitor:
                         current_structure != self.previous_structure):
                     current_price = df['Close'].iloc[-1]
                     ny_time = datetime.now(self.ny_tz)
-                    display_symbol = SYMBOL_DISPLAY_NAMES.get(self.symbol, self.symbol)
+                    display_symbol = SYMBOL_DISPLAY_NAMES.get(
+                        self.symbol, self.symbol)
                     message = (
                         f"Market Structure Change Detected\n\n"
                         f"Asset: {display_symbol} ({self.category})\n"
@@ -128,3 +162,32 @@ class MarketStructureMonitor:
             except Exception as e:
                 self.logger.error("Error in monitoring loop", error=str(e))
                 await asyncio.sleep(900)  # Fallback sleep on error
+
+
+# Example usage
+if __name__ == "__main__":
+    notification_config = {
+        "discord": {
+            "enabled": True,
+            "webhook_url": "https://discord.com/api/webhooks/1335713915610595460/CQGiu7or09z4-OHdxoXpLxAFGAY8Oa_OMDrfC05LvmaIYMPwZYY_1Vjid1OAVlwYpIiD"
+        }
+    }
+
+    symbols_to_monitor = [
+        {"symbol": "IXIC", "category": "Index"},
+        {"symbol": "GC=F", "category": "Commodity"},
+        {"symbol": "USDCAD=X", "category": "Forex"}
+    ]
+
+    async def main():
+        tasks = []
+        for symbol_info in symbols_to_monitor:
+            monitor = MarketStructureMonitor(
+                symbol=symbol_info["symbol"],
+                category=symbol_info["category"],
+                notification_config=notification_config
+            )
+            tasks.append(monitor.run())
+        await asyncio.gather(*tasks)
+
+    asyncio.run(main())
