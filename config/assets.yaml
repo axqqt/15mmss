@@ -3,9 +3,9 @@
 # Assets to monitor, grouped by category
 assets:
   crypto:  # Cryptocurrency assets
-    - BTCUSDT  # Bitcoin vs USDT
+    - BTC-USD  # Bitcoin vs USD
   stocks:  # Stock indices
-    - NQ  # NASDAQ Futures
+    - NQ=F
   forex:  # Foreign exchange pairs
     - EURUSD=X  # Euro vs USD
     - GBPUSD=X  # British Pound vs USD
