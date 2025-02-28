@@ -4,6 +4,7 @@
 assets:
   crypto:  # Cryptocurrency assets
     - BTC-USD  # Bitcoin vs USD
+    - ETH-USD # Eth vs USD
   stocks:  # Stock indices
     - NQ=F
   forex:  # Foreign exchange pairs
