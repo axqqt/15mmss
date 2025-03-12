@@ -21,4 +21,4 @@ notification:
 # Additional settings (optional)
 settings:
   timezone: "America/New_York"  # Default timezone for timestamps
-  interval_minutes: 15  # Monitoring interval in minutes
+  interval_minutes: 5  # Monitoring interval in minutes

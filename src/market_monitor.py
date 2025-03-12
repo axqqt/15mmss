@@ -46,7 +46,7 @@ class MarketStructureMonitor:
         for attempt in range(max_retries):
             try:
                 ticker = yf.Ticker(self.symbol)
-                df = ticker.history(interval='15m', period='2d')
+                df = ticker.history(interval='5m', period='2d')
                 data = df.tail(96)  # 96 15-minute periods in 24 hours
 
                 # Cache the data
